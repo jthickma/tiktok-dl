@@ -3,7 +3,7 @@ set -euo pipefail
 
 CHANNELS_FILE="/config/channels.txt"
 ARCHIVE_FILE="/config/archive.txt"
-OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s - %(title).80B [%(id)s].%(ext)s}"
+OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s/%(id)s.%(ext)s}"
 MAX_DOWNLOADS="${MAX_DOWNLOADS:-0}"
 COOKIES_FILE="/config/cookies.txt"
 PID_FILE="/tmp/download.pid"
