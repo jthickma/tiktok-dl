@@ -3,7 +3,7 @@ set -euo pipefail
 
 CHANNELS_FILE="/config/channels.txt"
 ARCHIVE_FILE="/config/archive.txt"
-OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s/%(id)s.%(ext)s}"
+OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s - %(title).80B [%(id)s].%(ext)s}"
 MAX_DOWNLOADS="${MAX_DOWNLOADS:-0}"
 COOKIES_FILE="/config/cookies.txt"
 PID_FILE="/tmp/download.pid"
@@ -41,12 +41,16 @@ while IFS= read -r channel || [[ -n "${channel}" ]]; do
   yt-dlp \
     --download-archive "${ARCHIVE_FILE}" \
     --output "/downloads/${OUTPUT_TEMPLATE}" \
-    --format "bestvideo*+bestaudio/best[ext=mp4]/best[ext=webm]/best" \
+    --format "bv*+ba/b" \
+    --match-filters "!is_live & original_url!*=/music/" \
+    --reject-title ".*\.mp3$" \
+    --merge-output-format mp4 \
     --embed-metadata \
+    --embed-thumbnail \
     --restrict-filenames \
     --no-overwrites \
     --ignore-errors \
-    --no-abort-on-error \ 
+    --no-abort-on-error \
     --break-on-existing \
     "${EXTRA_ARGS[@]}" \
     "${channel}" || echo "  Warning: errors occurred for ${channel}, continuing..."

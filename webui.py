@@ -6,7 +6,8 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from flask import Flask, request, redirect, url_for, Markup
+from flask import Flask, request, redirect, url_for
+from markupsafe import Markup
 
 app = Flask(__name__)
 
