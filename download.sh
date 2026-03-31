@@ -41,7 +41,7 @@ while IFS= read -r channel || [[ -n "${channel}" ]]; do
   yt-dlp \
     --download-archive "${ARCHIVE_FILE}" \
     --output "/downloads/${OUTPUT_TEMPLATE}" \
-    --format "best" \
+    --format "bestvideo*+bestaudio/best[ext=mp4]/best[ext=webm]/best" \
     --embed-metadata \
     --restrict-filenames \
     --no-overwrites \
