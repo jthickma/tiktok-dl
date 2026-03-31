@@ -43,13 +43,10 @@ while IFS= read -r channel || [[ -n "${channel}" ]]; do
     --output "/downloads/${OUTPUT_TEMPLATE}" \
     --format "best" \
     --embed-metadata \
-    --embed-thumbnail \
     --restrict-filenames \
     --no-overwrites \
     --ignore-errors \
-    --no-abort-on-error \
-    --sleep-interval 3 \
-    --max-sleep-interval 8 \
+    --no-abort-on-error \ 
     --break-on-existing \
     "${EXTRA_ARGS[@]}" \
     "${channel}" || echo "  Warning: errors occurred for ${channel}, continuing..."
