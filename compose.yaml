@@ -1,0 +1,29 @@
+services:
+  tiktok-dl:
+    build: .
+    container_name: tiktok-dl
+    restart: unless-stopped
+    environment:
+      # Cron schedule: every 6 hours
+      CRON_SCHEDULE: "0 */6 * * *"
+      # yt-dlp output template
+      OUTPUT_TEMPLATE: "%(uploader)s/%(upload_date)s - %(title).80B [%(id)s].%(ext)s"
+      # Max downloads per channel per run (0 = unlimited)
+      MAX_DOWNLOADS: "0"
+      # TZ for cron schedule
+      TZ: America/Chicago
+    volumes:
+      # Channel list — editable via web UI or any file editor
+      - ./channels.txt:/config/channels.txt
+      # Download archive — tracks already-downloaded videos
+      - ./archive.txt:/config/archive.txt
+      # Optional cookies file for authentication
+      # - ./cookies.txt:/config/cookies.txt:ro
+      # Downloaded videos output
+      - ./downloads:/downloads
+      # Persistent logs
+      - ./logs:/logs
+    expose:
+      - "8080"
+    labels:
+      proxy.aliases: tiktok-dl.jickman.cc
