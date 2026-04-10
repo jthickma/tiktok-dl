@@ -4,14 +4,24 @@ set -euo pipefail
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 */6 * * *}"
 CHANNELS_FILE="/config/channels.txt"
 LOG_FILE="/logs/download.log"
-PID_FILE="/tmp/download.pid"
+APP_USER="app"
+APP_GROUP="app"
+APP_UID="1000"
+APP_GID="1000"
 
-mkdir -p /logs
+run_as_app() {
+  su-exec "${APP_USER}:${APP_GROUP}" "$@"
+}
+
+mkdir -p /downloads /logs /config
 touch "${LOG_FILE}"
+touch /config/archive.txt
+chown -R "${APP_UID}:${APP_GID}" /downloads /logs
 
 echo "=== tiktok-dl ==="
 echo "Schedule : ${CRON_SCHEDULE}"
 echo "Web UI   : http://0.0.0.0:8080"
+echo "User     : ${APP_UID}:${APP_GID}"
 echo "Channels :"
 grep -v '^\s*#' "${CHANNELS_FILE}" 2>/dev/null | grep -v '^\s*$' | while read -r line; do
   echo "  - ${line}"
@@ -19,18 +29,18 @@ done
 echo ""
 
 # --- Generate crontab ---
-echo "${CRON_SCHEDULE} /download.sh >> /logs/download.log 2>&1" > /tmp/crontab
+echo "${CRON_SCHEDULE} /request_download.sh cron" > /tmp/crontab
 
 # --- Run initial download ---
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running initial download..." | tee -a "${LOG_FILE}"
-/download.sh >> "${LOG_FILE}" 2>&1 &
+run_as_app /request_download.sh startup
 
 # --- Start web UI (background) ---
-python3 /webui.py &
+run_as_app python3 /webui.py &
 WEBUI_PID=$!
 
 # --- Start cron (background) ---
-supercronic /tmp/crontab &
+run_as_app supercronic /tmp/crontab >> "${LOG_FILE}" 2>&1 &
 CRON_PID=$!
 
 # --- Watch channels.txt for edits (foreground) ---
@@ -56,15 +66,7 @@ while true; do
 
   echo "" >> "${LOG_FILE}"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] channels.txt changed — triggering download" | tee -a "${LOG_FILE}"
-
-  # Skip if already running
-  if [[ -f "${PID_FILE}" ]] && kill -0 "$(cat "${PID_FILE}" 2>/dev/null)" 2>/dev/null; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download already in progress, skipping" | tee -a "${LOG_FILE}"
-    continue
-  fi
-
-  /download.sh >> "${LOG_FILE}" 2>&1 &
-  echo $! > "${PID_FILE}"
+  run_as_app /request_download.sh watch
 
   # Debounce — ignore further edits for 10s
   sleep 10

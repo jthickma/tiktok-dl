@@ -3,60 +3,85 @@ set -euo pipefail
 
 CHANNELS_FILE="/config/channels.txt"
 ARCHIVE_FILE="/config/archive.txt"
+COOKIES_FILE="/config/cookies.txt"
+DOWNLOADS_DIR="/downloads"
 OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s - %(title).80B [%(id)s].%(ext)s}"
 MAX_DOWNLOADS="${MAX_DOWNLOADS:-0}"
-COOKIES_FILE="/config/cookies.txt"
-PID_FILE="/tmp/download.pid"
 
-# Write PID for concurrency guard
-echo $$ > "${PID_FILE}"
-trap 'rm -f "${PID_FILE}"' EXIT
+timestamp() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
 
-# Ensure archive file exists
-touch "${ARCHIVE_FILE}"
+log() {
+  echo "[$(timestamp)] $*"
+}
 
-echo "============================================"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download run"
-echo "============================================"
+normalize_channel() {
+  echo "$1" | sed 's/#.*//' | xargs
+}
 
-# Build extra args
-EXTRA_ARGS=()
-if [[ "${MAX_DOWNLOADS}" -gt 0 ]]; then
-  EXTRA_ARGS+=(--playlist-end "${MAX_DOWNLOADS}")
-fi
-if [[ -f "${COOKIES_FILE}" ]]; then
-  EXTRA_ARGS+=(--cookies "${COOKIES_FILE}")
-  echo "Using cookies file"
-fi
+build_extra_args() {
+  EXTRA_ARGS=()
 
-# Read channels, skip comments and blank lines
-while IFS= read -r channel || [[ -n "${channel}" ]]; do
-  # Strip comments and whitespace
-  channel="$(echo "${channel}" | sed 's/#.*//' | xargs)"
-  [[ -z "${channel}" ]] && continue
+  if [[ "${MAX_DOWNLOADS}" -gt 0 ]]; then
+    EXTRA_ARGS+=(--playlist-end "${MAX_DOWNLOADS}")
+  fi
 
-  echo ""
-  echo "--- Downloading: ${channel} ---"
+  if [[ -f "${COOKIES_FILE}" ]]; then
+    EXTRA_ARGS+=(--cookies "${COOKIES_FILE}")
+    log "Using cookies file"
+  fi
+}
+
+run_channel() {
+  local channel="$1"
 
   yt-dlp \
     --download-archive "${ARCHIVE_FILE}" \
-    --output "/downloads/${OUTPUT_TEMPLATE}" \
-    --format "bv*+ba/b" \
-    --match-filters "!is_live & original_url!*=/music/" \
-    --reject-title ".*\.mp3$" \
+    --output "${DOWNLOADS_DIR}/${OUTPUT_TEMPLATE}" \
+    --format "bv*+ba/bv" \
+    --match-filters "!is_live & original_url!*=/music/ & webpage_url!*=/music/ & ext!=mp3 & ext!=m4a" \
     --merge-output-format mp4 \
+    --write-info-json \
+    --write-description \
+    --write-thumbnail \
     --embed-metadata \
     --embed-thumbnail \
     --restrict-filenames \
-    --no-overwrites \
-    --ignore-errors \
-    --no-abort-on-error \
-    --break-on-existing \
+    --mtime \
     "${EXTRA_ARGS[@]}" \
-    "${channel}" || echo "  Warning: errors occurred for ${channel}, continuing..."
+    "${channel}"
+}
 
+mkdir -p "${DOWNLOADS_DIR}"
+touch "${ARCHIVE_FILE}"
+
+log "============================================"
+log "Starting download run"
+log "============================================"
+
+build_extra_args
+
+failures=0
+
+while IFS= read -r raw_channel || [[ -n "${raw_channel}" ]]; do
+  channel="$(normalize_channel "${raw_channel}")"
+  [[ -z "${channel}" ]] && continue
+
+  echo ""
+  log "Syncing ${channel}"
+
+  if ! run_channel "${channel}"; then
+    failures=$((failures + 1))
+    log "Channel sync failed: ${channel}"
+  fi
 done < "${CHANNELS_FILE}"
 
 echo ""
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download run complete"
-echo "============================================"
+log "Download run complete"
+log "============================================"
+
+if [[ "${failures}" -gt 0 ]]; then
+  log "Completed with ${failures} channel failure(s)"
+  exit 1
+fi
