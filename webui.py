@@ -6,11 +6,14 @@ import mimetypes
 import os
 import re
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, redirect, render_template_string, request, send_file, url_for
+from jinja2 import Template
 
 app = Flask(__name__)
 
@@ -23,6 +26,8 @@ PENDING_FILE = Path("/tmp/download.pending")
 REQUEST_SCRIPT = "/request_download.sh"
 MEDIA_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
 THUMBNAIL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+PER_PAGE = 24
+CACHE_TTL = 30  # seconds
 
 
 @dataclass
@@ -41,6 +46,80 @@ class MediaEntry:
     upload_date: str | None
     duration_label: str | None
     caption: str | None
+
+
+# ---------------------------------------------------------------------------
+# Media-index cache — avoid rglob + stat + JSON parse on every page load
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _CachedFile:
+    path: Path
+    creator: str
+    size: int
+    mtime: float
+    metadata: dict
+
+
+class _MediaCache:
+    """Thread-safe cache of the media index.  Rebuilds at most once per CACHE_TTL."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._files: list[_CachedFile] = []
+        self._creators: list[str] = []
+        self._total_size: int = 0
+        self._built_at: float = 0.0
+
+    def _build(self) -> None:
+        media_files: list[Path] = []
+        for path in DOWNLOADS_DIR.rglob("*"):
+            if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
+                media_files.append(path)
+
+        entries: list[_CachedFile] = []
+        creator_set: set[str] = set()
+        total_size = 0
+
+        for mp in media_files:
+            stat = mp.stat()
+            total_size += stat.st_size
+            rel = mp.relative_to(DOWNLOADS_DIR).parts
+            creator = rel[0] if len(rel) > 1 else "root"
+            creator_set.add(creator)
+
+            info_path = mp.with_name(f"{mp.stem}.info.json")
+            metadata: dict = {}
+            if info_path.exists():
+                try:
+                    metadata = json.loads(info_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            entries.append(_CachedFile(
+                path=mp, creator=creator, size=stat.st_size,
+                mtime=stat.st_mtime, metadata=metadata,
+            ))
+
+        entries.sort(key=lambda e: e.mtime, reverse=True)
+
+        self._files = entries
+        self._creators = sorted(creator_set)
+        self._total_size = total_size
+        self._built_at = time.monotonic()
+
+    def get(self) -> tuple[list[_CachedFile], list[str], int, int]:
+        with self._lock:
+            if time.monotonic() - self._built_at > CACHE_TTL:
+                self._build()
+            return self._files, self._creators, len(self._files), self._total_size
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._built_at = 0.0
+
+
+_media_cache = _MediaCache()
 
 
 PAGE_TEMPLATE = """
@@ -464,6 +543,49 @@ PAGE_TEMPLATE = """
       font-size: 0.95rem;
     }
 
+    .pagination {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 1.2rem;
+    }
+
+    .pagination a,
+    .pagination span {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2.4rem;
+      padding: 0.5rem 0.7rem;
+      border: 1px solid rgba(204, 178, 118, 0.2);
+      background: rgba(6, 11, 14, 0.5);
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-decoration: none;
+      transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+    }
+
+    .pagination a:hover {
+      border-color: rgba(214, 176, 111, 0.48);
+      background: rgba(214, 176, 111, 0.1);
+      color: var(--text);
+    }
+
+    .pagination .current {
+      border-color: rgba(214, 176, 111, 0.5);
+      background: rgba(214, 176, 111, 0.16);
+      color: var(--accent-strong);
+      font-weight: 600;
+    }
+
+    .pagination .info {
+      border: none;
+      background: none;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
     .log-panel pre {
       margin: 0;
       padding: 1rem;
@@ -638,7 +760,7 @@ PAGE_TEMPLATE = """
       <div class="media-grid">
         {% for entry in media_entries %}
         <article class="media-card">
-          <video controls preload="metadata" {% if entry.poster_url %}poster="{{ entry.poster_url }}"{% endif %}>
+          <video controls preload="none" {% if entry.poster_url %}poster="{{ entry.poster_url }}"{% endif %} loading="lazy">
             <source src="{{ entry.media_url }}">
           </video>
           <div>
@@ -681,6 +803,26 @@ PAGE_TEMPLATE = """
         </article>
         {% endfor %}
       </div>
+
+      {% if total_pages > 1 %}
+      <nav class="pagination">
+        <span class="info">{{ matched_count }} result{{ "s" if matched_count != 1 else "" }}</span>
+        {% if page > 1 %}
+        <a href="{{ page_url(1) }}">1</a>
+        {% endif %}
+        {% if page > 2 %}
+        <a href="{{ page_url(page - 1) }}">&laquo; Prev</a>
+        {% endif %}
+        <span class="current">{{ page }}</span>
+        {% if page < total_pages %}
+        <a href="{{ page_url(page + 1) }}">Next &raquo;</a>
+        {% endif %}
+        {% if page < total_pages %}
+        <a href="{{ page_url(total_pages) }}">{{ total_pages }}</a>
+        {% endif %}
+      </nav>
+      {% endif %}
+
       {% else %}
       <div class="empty-state">No media matched the current filters. Clear the filters or wait for the next sync pass.</div>
       {% endif %}
@@ -696,9 +838,42 @@ PAGE_TEMPLATE = """
       <pre>{{ logs }}</pre>
     </section>
   </main>
+
+  <script>
+  // Lazy-load video posters via IntersectionObserver so off-screen cards
+  // don't trigger network requests for poster images or video metadata.
+  (function() {
+    var cards = document.querySelectorAll('.media-card video[poster]');
+    if (!cards.length || !('IntersectionObserver' in window)) return;
+
+    // Move poster to data-poster so it doesn't load immediately
+    cards.forEach(function(v) {
+      v.dataset.poster = v.getAttribute('poster');
+      v.removeAttribute('poster');
+    });
+
+    var obs = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          var el = entry.target;
+          if (el.dataset.poster) {
+            el.setAttribute('poster', el.dataset.poster);
+            delete el.dataset.poster;
+          }
+          obs.unobserve(el);
+        }
+      });
+    }, { rootMargin: '200px' });
+
+    cards.forEach(function(v) { obs.observe(v); });
+  })();
+  </script>
 </body>
 </html>
 """
+
+# Pre-compile template once at import time
+_compiled_template = Template(PAGE_TEMPLATE)
 
 
 def read_text(path: Path) -> str:
@@ -821,15 +996,6 @@ def find_thumbnail(media_path: Path) -> Path | None:
     return None
 
 
-def load_metadata(info_path: Path) -> dict:
-    if not info_path.exists():
-        return {}
-    try:
-        return json.loads(info_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
 def relative_download_path(path: Path) -> str:
     return path.relative_to(DOWNLOADS_DIR).as_posix()
 
@@ -840,73 +1006,66 @@ def download_url(path: Path | None) -> str | None:
     return url_for("download_asset", relative_path=relative_download_path(path))
 
 
-def gather_media_entries(query: str = "", creator: str = "") -> tuple[list[MediaEntry], list[str], int, int]:
+def gather_media_entries(
+    query: str = "", creator: str = "", page: int = 1,
+) -> tuple[list[MediaEntry], list[str], int, int, int]:
+    """Return (page_entries, creators, total_media_count, total_size, matched_count)."""
     if not DOWNLOADS_DIR.exists():
-        return [], [], 0, 0
+        return [], [], 0, 0, 0
 
-    media_files = [
-        path for path in DOWNLOADS_DIR.rglob("*")
-        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
-    ]
-    media_files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-
-    creators = sorted({
-        path.relative_to(DOWNLOADS_DIR).parts[0]
-        for path in media_files
-        if path.relative_to(DOWNLOADS_DIR).parts
-    })
+    cached_files, creators, media_count, total_size = _media_cache.get()
 
     normalized_query = query.strip().lower()
-    matched_entries: list[MediaEntry] = []
-    total_size = 0
+    matched: list[_CachedFile] = []
 
-    for media_path in media_files:
-        stat = media_path.stat()
-        total_size += stat.st_size
-
-        relative_parts = media_path.relative_to(DOWNLOADS_DIR).parts
-        media_creator = relative_parts[0] if len(relative_parts) > 1 else "root"
-        if creator and media_creator != creator:
+    for cf in cached_files:
+        if creator and cf.creator != creator:
             continue
 
-        info_path = sidecar_path(media_path, ".info.json")
-        description_path = sidecar_path(media_path, ".description")
-        metadata = load_metadata(info_path)
-        thumbnail_path = find_thumbnail(media_path)
+        if normalized_query:
+            title = cf.metadata.get("title") or clean_title(cf.path.name)
+            caption = cf.metadata.get("description") or ""
+            source_url = cf.metadata.get("webpage_url") or cf.metadata.get("original_url") or ""
+            uploader = cf.metadata.get("uploader") or cf.creator
+            searchable = f"{title} {caption} {source_url} {uploader} {cf.path.name}".lower()
+            if normalized_query not in searchable:
+                continue
 
-        title = metadata.get("title") or clean_title(media_path.name)
-        caption = metadata.get("description")
-        source_url = metadata.get("webpage_url") or metadata.get("original_url")
-        searchable_text = " ".join([
-            title,
-            caption or "",
-            source_url or "",
-            metadata.get("uploader") or media_creator,
-            media_path.name,
-        ]).lower()
-        if normalized_query and normalized_query not in searchable_text:
-            continue
+        matched.append(cf)
 
-        matched_entries.append(
+    matched_count = len(matched)
+
+    # Paginate
+    start = (page - 1) * PER_PAGE
+    page_files = matched[start : start + PER_PAGE]
+
+    entries: list[MediaEntry] = []
+    for cf in page_files:
+        info_path = sidecar_path(cf.path, ".info.json")
+        description_path = sidecar_path(cf.path, ".description")
+        thumbnail_path = find_thumbnail(cf.path)
+        md = cf.metadata
+
+        entries.append(
             MediaEntry(
-                creator=metadata.get("uploader") or media_creator,
-                title=title,
-                relative_path=relative_download_path(media_path),
-                media_url=download_url(media_path),
+                creator=md.get("uploader") or cf.creator,
+                title=md.get("title") or clean_title(cf.path.name),
+                relative_path=relative_download_path(cf.path),
+                media_url=download_url(cf.path),
                 poster_url=download_url(thumbnail_path),
                 info_url=download_url(info_path) if info_path.exists() else None,
                 description_url=download_url(description_path) if description_path.exists() else None,
-                file_name=media_path.name,
-                size_label=format_bytes(stat.st_size),
-                modified_label=datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                source_url=source_url,
-                upload_date=format_upload_date(metadata.get("upload_date")),
-                duration_label=format_duration(metadata.get("duration")),
-                caption=caption,
+                file_name=cf.path.name,
+                size_label=format_bytes(cf.size),
+                modified_label=datetime.fromtimestamp(cf.mtime).strftime("%Y-%m-%d %H:%M"),
+                source_url=md.get("webpage_url") or md.get("original_url"),
+                upload_date=format_upload_date(md.get("upload_date")),
+                duration_label=format_duration(md.get("duration")),
+                caption=md.get("description"),
             )
         )
 
-    return matched_entries, creators, len(media_files), total_size
+    return entries, creators, media_count, total_size, matched_count
 
 
 def resolve_download_path(relative_path: str) -> Path:
@@ -925,11 +1084,18 @@ def index():
     flash_type = request.args.get("ft", "ok")
     query = request.args.get("q", "").strip()
     selected_creator = request.args.get("creator", "").strip()
+    page = max(1, request.args.get("page", 1, type=int))
     running = is_running()
     queued = is_queued()
     channels = read_channels()
     logs = read_logs()
-    media_entries, creators, media_count, total_size = gather_media_entries(query, selected_creator)
+    media_entries, creators, media_count, total_size, matched_count = gather_media_entries(
+        query, selected_creator, page,
+    )
+
+    total_pages = max(1, (matched_count + PER_PAGE - 1) // PER_PAGE)
+    if page > total_pages:
+        page = total_pages
 
     if running and queued:
         worker_state = "Syncing and queued"
@@ -942,8 +1108,18 @@ def index():
 
     run_button_label = "Save and queue sync" if running or queued else "Save and sync now"
 
-    return render_template_string(
-        PAGE_TEMPLATE,
+    def page_url(p: int) -> str:
+        params = {}
+        if query:
+            params["q"] = query
+        if selected_creator:
+            params["creator"] = selected_creator
+        if p > 1:
+            params["page"] = str(p)
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        return f"/?{qs}" if qs else "/"
+
+    return _compiled_template.render(
         flash=flash,
         flash_type=flash_type,
         running=running,
@@ -963,6 +1139,10 @@ def index():
         query=query,
         selected_creator=selected_creator,
         run_button_label=run_button_label,
+        page=page,
+        total_pages=total_pages,
+        matched_count=matched_count,
+        page_url=page_url,
     )
 
 
@@ -973,6 +1153,7 @@ def save():
         channels += "\n"
 
     CHANNELS_FILE.write_text(channels, encoding="utf-8")
+    _media_cache.invalidate()
 
     if request.args.get("run"):
         try:
