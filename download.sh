@@ -39,7 +39,7 @@ run_channel() {
   yt-dlp \
     --download-archive "${ARCHIVE_FILE}" \
     --output "${DOWNLOADS_DIR}/${OUTPUT_TEMPLATE}" \
-    --format "bv*+ba/bv" \
+    --format "bv*+ba/b" \
     --match-filters "!is_live & original_url!*=/music/ & webpage_url!*=/music/ & ext!=mp3 & ext!=m4a" \
     --merge-output-format mp4 \
     --write-info-json \
