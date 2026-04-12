@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-PID_FILE="/tmp/download.pid"
-PENDING_FILE="/tmp/download.pending"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PID_FILE="${PID_FILE:-/tmp/tiktok-dl.pid}"
+PENDING_FILE="${PENDING_FILE:-/tmp/tiktok-dl.pending}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -26,7 +27,7 @@ while true; do
   rm -f "${PENDING_FILE}"
 
   log "Worker starting sync pass"
-  if ! /download.sh; then
+  if ! "${SCRIPT_DIR}/download.sh"; then
     overall_status=1
     log "Sync pass completed with errors"
   else

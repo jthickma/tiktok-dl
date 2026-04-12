@@ -18,13 +18,14 @@ from jinja2 import Template
 
 app = Flask(__name__)
 
-CHANNELS_FILE = Path("/config/channels.txt")
-ARCHIVE_FILE = Path("/config/archive.txt")
-DOWNLOADS_DIR = Path("/downloads")
-LOG_FILE = Path("/logs/download.log")
-PID_FILE = Path("/tmp/download.pid")
-PENDING_FILE = Path("/tmp/download.pending")
-REQUEST_SCRIPT = "/request_download.sh"
+_BASE = Path(__file__).parent
+CHANNELS_FILE = Path(os.environ.get("CHANNELS_FILE", _BASE / "channels.txt"))
+ARCHIVE_FILE = Path(os.environ.get("ARCHIVE_FILE", _BASE / "archive.txt"))
+DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", _BASE / "downloads"))
+LOG_FILE = Path(os.environ.get("LOG_FILE", _BASE / "logs" / "download.log"))
+PID_FILE = Path(os.environ.get("PID_FILE", "/tmp/tiktok-dl.pid"))
+PENDING_FILE = Path(os.environ.get("PENDING_FILE", "/tmp/tiktok-dl.pending"))
+REQUEST_SCRIPT = os.environ.get("REQUEST_SCRIPT", str(_BASE / "request_download.sh"))
 MEDIA_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
 THUMBNAIL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 PER_PAGE = 24
@@ -1297,6 +1298,7 @@ def download_asset(relative_path: str):
 
 
 if __name__ == "__main__":
-    os.makedirs("/logs", exist_ok=True)
-    os.makedirs("/downloads", exist_ok=True)
-    app.run(host="0.0.0.0", port=8080)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    ARCHIVE_FILE.touch(exist_ok=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))

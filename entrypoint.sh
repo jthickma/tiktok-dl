@@ -2,8 +2,13 @@
 set -euo pipefail
 
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 */6 * * *}"
-CHANNELS_FILE="/config/channels.txt"
-LOG_FILE="/logs/download.log"
+export CHANNELS_FILE="/config/channels.txt"
+export ARCHIVE_FILE="/config/archive.txt"
+export DOWNLOADS_DIR="/downloads"
+export LOG_FILE="/logs/download.log"
+export PID_FILE="/tmp/download.pid"
+export PENDING_FILE="/tmp/download.pending"
+export REQUEST_SCRIPT="/request_download.sh"
 APP_USER="app"
 APP_GROUP="app"
 APP_UID="1000"

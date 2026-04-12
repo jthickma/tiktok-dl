@@ -1,10 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-PID_FILE="/tmp/download.pid"
-PENDING_FILE="/tmp/download.pending"
-REQUEST_LOCK_DIR="/tmp/download-request.lock"
-LOG_FILE="/logs/download.log"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PID_FILE="${PID_FILE:-/tmp/tiktok-dl.pid}"
+PENDING_FILE="${PENDING_FILE:-/tmp/tiktok-dl.pending}"
+REQUEST_LOCK_DIR="${REQUEST_LOCK_DIR:-/tmp/tiktok-dl-request.lock}"
+LOG_FILE="${LOG_FILE:-/logs/download.log}"
 SOURCE="${1:-manual}"
 
 timestamp() {
@@ -25,7 +26,7 @@ is_running() {
   kill -0 "${pid}" 2>/dev/null
 }
 
-mkdir -p /logs
+mkdir -p "$(dirname "${LOG_FILE}")"
 touch "${LOG_FILE}"
 touch "${PENDING_FILE}"
 
@@ -39,6 +40,6 @@ if is_running; then
   exit 2
 fi
 
-/download_worker.sh >> "${LOG_FILE}" 2>&1 &
+"${SCRIPT_DIR}/download_worker.sh" >> "${LOG_FILE}" 2>&1 &
 echo $! > "${PID_FILE}"
 log "Download request started (${SOURCE})"
