@@ -48,7 +48,8 @@ run_channel() {
     --embed-metadata \
     --embed-thumbnail \
     --restrict-filenames \
-    --mtime \
+    --no-mtime \
+    --exec "touch -t %(timestamp>%Y%m%d%H%M.%S)s -- %(filepath)q" \
     "${EXTRA_ARGS[@]}" \
     "${channel}"
 }

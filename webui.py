@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import stat as stat_mod
 import subprocess
 import threading
 import time
@@ -27,7 +28,7 @@ REQUEST_SCRIPT = "/request_download.sh"
 MEDIA_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
 THUMBNAIL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 PER_PAGE = 24
-CACHE_TTL = 30  # seconds
+CACHE_TTL = 300  # seconds — async background refresh, served stale meanwhile
 
 
 @dataclass
@@ -59,64 +60,111 @@ class _CachedFile:
     size: int
     mtime: float
     metadata: dict
+    thumbnail: Path | None
+    info_path: Path | None
+    description_path: Path | None
 
 
 class _MediaCache:
-    """Thread-safe cache of the media index.  Rebuilds at most once per CACHE_TTL."""
+    """Incremental media index. Keeps parsed metadata; only re-stats/re-parses changed files.
+
+    Initial build is synchronous (cold start). Subsequent refreshes run in a
+    background thread so requests never block on rglob + JSON parse.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._files: list[_CachedFile] = []
+        self._by_path: dict[Path, _CachedFile] = {}
+        self._sorted: list[_CachedFile] = []
         self._creators: list[str] = []
         self._total_size: int = 0
         self._built_at: float = 0.0
+        self._refreshing = False
 
-    def _build(self) -> None:
-        media_files: list[Path] = []
-        for path in DOWNLOADS_DIR.rglob("*"):
-            if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
-                media_files.append(path)
-
-        entries: list[_CachedFile] = []
+    def _scan_once(self) -> None:
+        prior = self._by_path
+        new_by_path: dict[Path, _CachedFile] = {}
         creator_set: set[str] = set()
         total_size = 0
 
-        for mp in media_files:
-            stat = mp.stat()
-            total_size += stat.st_size
-            rel = mp.relative_to(DOWNLOADS_DIR).parts
-            creator = rel[0] if len(rel) > 1 else "root"
-            creator_set.add(creator)
+        for path in DOWNLOADS_DIR.rglob("*"):
+            if path.suffix.lower() not in MEDIA_EXTENSIONS:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if not stat_mod.S_ISREG(stat.st_mode):
+                continue
 
-            info_path = mp.with_name(f"{mp.stem}.info.json")
-            metadata: dict = {}
-            if info_path.exists():
-                try:
-                    metadata = json.loads(info_path.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    pass
+            existing = prior.get(path)
+            if existing and existing.mtime == stat.st_mtime and existing.size == stat.st_size:
+                cf = existing
+            else:
+                rel = path.relative_to(DOWNLOADS_DIR).parts
+                creator = rel[0] if len(rel) > 1 else "root"
+                info_path = path.with_name(f"{path.stem}.info.json")
+                metadata: dict = {}
+                info_real: Path | None = None
+                if info_path.exists():
+                    info_real = info_path
+                    try:
+                        metadata = json.loads(info_path.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                thumb: Path | None = None
+                for ext in THUMBNAIL_EXTENSIONS:
+                    cand = path.with_name(f"{path.stem}{ext}")
+                    if cand.exists():
+                        thumb = cand
+                        break
+                desc_path = path.with_name(f"{path.stem}.description")
+                desc_real = desc_path if desc_path.exists() else None
+                cf = _CachedFile(
+                    path=path, creator=creator, size=stat.st_size,
+                    mtime=stat.st_mtime, metadata=metadata,
+                    thumbnail=thumb, info_path=info_real, description_path=desc_real,
+                )
+            new_by_path[path] = cf
+            total_size += cf.size
+            creator_set.add(cf.creator)
 
-            entries.append(_CachedFile(
-                path=mp, creator=creator, size=stat.st_size,
-                mtime=stat.st_mtime, metadata=metadata,
-            ))
+        sorted_files = sorted(new_by_path.values(), key=lambda e: e.mtime, reverse=True)
 
-        entries.sort(key=lambda e: e.mtime, reverse=True)
+        with self._lock:
+            self._by_path = new_by_path
+            self._sorted = sorted_files
+            self._creators = sorted(creator_set)
+            self._total_size = total_size
+            self._built_at = time.monotonic()
 
-        self._files = entries
-        self._creators = sorted(creator_set)
-        self._total_size = total_size
-        self._built_at = time.monotonic()
+    def _refresh_async(self) -> None:
+        with self._lock:
+            if self._refreshing:
+                return
+            self._refreshing = True
+
+        def _runner() -> None:
+            try:
+                self._scan_once()
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        threading.Thread(target=_runner, daemon=True).start()
 
     def get(self) -> tuple[list[_CachedFile], list[str], int, int]:
+        if self._built_at == 0.0:
+            self._scan_once()  # cold start: must block
+        elif time.monotonic() - self._built_at > CACHE_TTL:
+            self._refresh_async()  # stale: refresh in background, serve stale now
         with self._lock:
-            if time.monotonic() - self._built_at > CACHE_TTL:
-                self._build()
-            return self._files, self._creators, len(self._files), self._total_size
+            return self._sorted, self._creators, len(self._sorted), self._total_size
 
     def invalidate(self) -> None:
-        with self._lock:
-            self._built_at = 0.0
+        if self._built_at == 0.0:
+            return  # cold anyway; get() will build
+        self._refresh_async()
 
 
 _media_cache = _MediaCache()
@@ -482,12 +530,56 @@ PAGE_TEMPLATE = """
     }
 
     .media-card video,
-    .media-card img {
+    .media-card img,
+    .media-thumb {
       width: 100%;
       aspect-ratio: 9 / 16;
       object-fit: cover;
       background: #05080a;
       border: 1px solid rgba(204, 178, 118, 0.12);
+    }
+
+    .media-thumb {
+      position: relative;
+      display: block;
+      cursor: pointer;
+      overflow: hidden;
+    }
+
+    .media-thumb img {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+
+    .media-thumb-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .media-thumb .play-btn {
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 3.2rem;
+      height: 3.2rem;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: transform 140ms ease, background 140ms ease;
+    }
+
+    .media-thumb:hover .play-btn {
+      transform: scale(1.08);
+      background: rgba(0, 0, 0, 0.75);
     }
 
     .media-card h3 {
@@ -760,9 +852,14 @@ PAGE_TEMPLATE = """
       <div class="media-grid">
         {% for entry in media_entries %}
         <article class="media-card">
-          <video controls preload="none" {% if entry.poster_url %}poster="{{ entry.poster_url }}"{% endif %} loading="lazy">
-            <source src="{{ entry.media_url }}">
-          </video>
+          <div class="media-thumb" data-media="{{ entry.media_url }}"{% if entry.poster_url %} data-poster="{{ entry.poster_url }}"{% endif %}>
+            {% if entry.poster_url %}
+            <img src="{{ entry.poster_url }}" loading="lazy" decoding="async" alt="">
+            {% else %}
+            <div class="media-thumb-empty">No preview</div>
+            {% endif %}
+            <button class="play-btn" type="button" aria-label="Play">▶</button>
+          </div>
           <div>
             <div class="creator">{{ entry.creator }}</div>
             <h3>{{ entry.title }}</h3>
@@ -840,32 +937,29 @@ PAGE_TEMPLATE = """
   </main>
 
   <script>
-  // Lazy-load video posters via IntersectionObserver so off-screen cards
-  // don't trigger network requests for poster images or video metadata.
+  // Click-to-play: thumbs are <img> until clicked, then swap to <video>.
+  // Avoids instantiating 24 video elements per page.
   (function() {
-    var cards = document.querySelectorAll('.media-card video[poster]');
-    if (!cards.length || !('IntersectionObserver' in window)) return;
-
-    // Move poster to data-poster so it doesn't load immediately
-    cards.forEach(function(v) {
-      v.dataset.poster = v.getAttribute('poster');
-      v.removeAttribute('poster');
-    });
-
-    var obs = new IntersectionObserver(function(entries) {
-      entries.forEach(function(entry) {
-        if (entry.isIntersecting) {
-          var el = entry.target;
-          if (el.dataset.poster) {
-            el.setAttribute('poster', el.dataset.poster);
-            delete el.dataset.poster;
-          }
-          obs.unobserve(el);
-        }
-      });
-    }, { rootMargin: '200px' });
-
-    cards.forEach(function(v) { obs.observe(v); });
+    document.addEventListener('click', function(ev) {
+      var thumb = ev.target.closest('.media-thumb');
+      if (!thumb || !thumb.dataset.media) return;
+      ev.preventDefault();
+      var url = thumb.dataset.media;
+      var poster = thumb.dataset.poster || '';
+      var video = document.createElement('video');
+      video.controls = true;
+      video.autoplay = true;
+      video.preload = 'metadata';
+      if (poster) video.poster = poster;
+      video.src = url;
+      video.style.width = '100%';
+      video.style.height = '100%';
+      video.style.objectFit = 'cover';
+      thumb.innerHTML = '';
+      thumb.style.cursor = 'default';
+      thumb.removeAttribute('data-media');
+      thumb.appendChild(video);
+    }, false);
   })();
   </script>
 </body>
@@ -975,6 +1069,17 @@ def format_upload_date(raw_value: str | None) -> str | None:
     return raw_value
 
 
+_FILENAME_DATE_RE = re.compile(r"^(\d{8}) - ")
+
+
+def upload_date_from_filename(file_name: str) -> str | None:
+    """Filenames are `YYYYMMDD - title [id].ext`. Fallback when info.json missing."""
+    match = _FILENAME_DATE_RE.match(file_name)
+    if not match:
+        return None
+    return match.group(1)
+
+
 def clean_title(file_name: str) -> str:
     title = Path(file_name).stem
     if title.startswith(tuple(str(year) for year in range(2000, 2100))) and " - " in title:
@@ -1041,10 +1146,8 @@ def gather_media_entries(
 
     entries: list[MediaEntry] = []
     for cf in page_files:
-        info_path = sidecar_path(cf.path, ".info.json")
-        description_path = sidecar_path(cf.path, ".description")
-        thumbnail_path = find_thumbnail(cf.path)
         md = cf.metadata
+        upload_raw = md.get("upload_date") or upload_date_from_filename(cf.path.name)
 
         entries.append(
             MediaEntry(
@@ -1052,14 +1155,14 @@ def gather_media_entries(
                 title=md.get("title") or clean_title(cf.path.name),
                 relative_path=relative_download_path(cf.path),
                 media_url=download_url(cf.path),
-                poster_url=download_url(thumbnail_path),
-                info_url=download_url(info_path) if info_path.exists() else None,
-                description_url=download_url(description_path) if description_path.exists() else None,
+                poster_url=download_url(cf.thumbnail),
+                info_url=download_url(cf.info_path),
+                description_url=download_url(cf.description_path),
                 file_name=cf.path.name,
                 size_label=format_bytes(cf.size),
                 modified_label=datetime.fromtimestamp(cf.mtime).strftime("%Y-%m-%d %H:%M"),
                 source_url=md.get("webpage_url") or md.get("original_url"),
-                upload_date=format_upload_date(md.get("upload_date")),
+                upload_date=format_upload_date(upload_raw),
                 duration_label=format_duration(md.get("duration")),
                 caption=md.get("description"),
             )
@@ -1182,7 +1285,15 @@ def run():
 def download_asset(relative_path: str):
     file_path = resolve_download_path(relative_path)
     mimetype, _ = mimetypes.guess_type(file_path.name)
-    return send_file(file_path, mimetype=mimetype or "application/octet-stream")
+    response = send_file(
+        file_path,
+        mimetype=mimetype or "application/octet-stream",
+        conditional=True,
+    )
+    # Files are content-addressed by path; safe to cache aggressively.
+    # Flask's send_file(conditional=True) sets no_cache; clear it before our override.
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 
 if __name__ == "__main__":
