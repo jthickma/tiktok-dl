@@ -1,9 +1,12 @@
 #!/bin/bash
-set -euo pipefail
+# Worker loop: drains the pending flag, replays passes if a request lands during
+# a run. Never exits non-zero on yt-dlp errors — those are surfaced in the log.
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="${PID_FILE:-/tmp/tiktok-dl.pid}"
 PENDING_FILE="${PENDING_FILE:-/tmp/tiktok-dl.pending}"
+LAST_RUN_FILE="${LAST_RUN_FILE:-/tmp/tiktok-dl.last-run}"
 
 timestamp() {
   date '+%Y-%m-%d %H:%M:%S'
@@ -21,18 +24,13 @@ trap cleanup EXIT
 
 echo $$ > "${PID_FILE}"
 
-overall_status=0
-
 while true; do
   rm -f "${PENDING_FILE}"
 
   log "Worker starting sync pass"
-  if ! "${SCRIPT_DIR}/download.sh"; then
-    overall_status=1
-    log "Sync pass completed with errors"
-  else
-    log "Sync pass completed successfully"
-  fi
+  "${SCRIPT_DIR}/download.sh" || log "Sync pass reported soft errors (continuing)"
+  date +%s > "${LAST_RUN_FILE}" 2>/dev/null || true
+  log "Sync pass finished"
 
   if [[ ! -f "${PENDING_FILE}" ]]; then
     break
@@ -41,4 +39,4 @@ while true; do
   log "Another sync was requested while busy; starting the next pass"
 done
 
-exit "${overall_status}"
+exit 0

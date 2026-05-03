@@ -39,6 +39,7 @@ _defaults = {
     "LOG_FILE": str(_BASE / "logs" / "download.log"),
     "PID_FILE": "/tmp/tiktok-dl.pid",
     "PENDING_FILE": "/tmp/tiktok-dl.pending",
+    "LAST_RUN_FILE": "/tmp/tiktok-dl.last-run",
     "REQUEST_SCRIPT": str(_BASE / "request_download.sh"),
 }
 for key, val in _defaults.items():

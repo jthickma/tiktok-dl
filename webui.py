@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, abort, redirect, render_template_string, request, send_file, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, url_for
 from jinja2 import Template
 
 app = Flask(__name__)
@@ -25,6 +25,7 @@ DOWNLOADS_DIR = Path(os.environ.get("DOWNLOADS_DIR", _BASE / "downloads"))
 LOG_FILE = Path(os.environ.get("LOG_FILE", _BASE / "logs" / "download.log"))
 PID_FILE = Path(os.environ.get("PID_FILE", "/tmp/tiktok-dl.pid"))
 PENDING_FILE = Path(os.environ.get("PENDING_FILE", "/tmp/tiktok-dl.pending"))
+LAST_RUN_FILE = Path(os.environ.get("LAST_RUN_FILE", "/tmp/tiktok-dl.last-run"))
 REQUEST_SCRIPT = os.environ.get("REQUEST_SCRIPT", str(_BASE / "request_download.sh"))
 MEDIA_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
 THUMBNAIL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
@@ -327,7 +328,7 @@ PAGE_TEMPLATE = """
 
     .overview {
       margin-top: 1.4rem;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
     .metric {
@@ -705,12 +706,21 @@ PAGE_TEMPLATE = """
       }
     }
 
+    @media (max-width: 1180px) {
+      .overview {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
     @media (max-width: 1024px) {
       .topbar,
       .workspace,
-      .media-toolbar,
-      .overview {
+      .media-toolbar {
         grid-template-columns: 1fr;
+      }
+
+      .overview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       .status-tile {
@@ -753,10 +763,10 @@ PAGE_TEMPLATE = """
         <div class="status-tile">
           <span class="status-label">Current worker state</span>
           <div class="status-value">
-            <span class="status-dot {% if running %}running{% elif queued %}queued{% endif %}"></span>
-            <strong>{{ worker_state }}</strong>
+            <span class="status-dot {% if running %}running{% elif queued %}queued{% endif %}" data-status-dot></span>
+            <strong data-status-text>{{ worker_state }}</strong>
           </div>
-          <p class="subhead" style="margin-top:0.7rem; font-size:0.88rem;">{% if queued %}Another sync pass is already staged behind the active run.{% elif running %}The active pass will finish before a queued request is promoted.{% else %}No active sync. New requests start immediately.{% endif %}</p>
+          <p class="subhead" style="margin-top:0.7rem; font-size:0.88rem;" data-status-hint>{% if queued %}Another sync pass is already staged behind the active run.{% elif running %}The active pass will finish before a queued request is promoted.{% else %}No active sync. New requests start immediately.{% endif %}</p>
         </div>
       </div>
 
@@ -777,10 +787,14 @@ PAGE_TEMPLATE = """
           <span>Library Size</span>
           <strong>{{ library_size }}</strong>
         </div>
+        <div class="metric">
+          <span>Last Sync</span>
+          <strong data-last-run>{{ last_run }}</strong>
+        </div>
       </div>
 
       {% if flash %}
-      <div class="flash {{ flash_type }}">{{ flash }}</div>
+      <div class="flash {{ flash_type }}" data-flash>{{ flash }}</div>
       {% endif %}
     </section>
 
@@ -933,7 +947,7 @@ PAGE_TEMPLATE = """
           <p>Latest sync activity from the worker queue, channel watcher, cron schedule, and yt-dlp runs.</p>
         </div>
       </div>
-      <pre>{{ logs }}</pre>
+      <pre data-log-pane>{{ logs }}</pre>
     </section>
   </main>
 
@@ -961,6 +975,56 @@ PAGE_TEMPLATE = """
       thumb.removeAttribute('data-media');
       thumb.appendChild(video);
     }, false);
+  })();
+
+  // Auto-dismiss flash after 6s.
+  (function() {
+    var flash = document.querySelector('[data-flash]');
+    if (!flash) return;
+    setTimeout(function() {
+      flash.style.transition = 'opacity 400ms ease';
+      flash.style.opacity = '0';
+      setTimeout(function() { flash.remove(); }, 450);
+    }, 6000);
+  })();
+
+  // Live status + log refresh — polls /api/status. Faster cadence while running.
+  (function() {
+    var dot = document.querySelector('[data-status-dot]');
+    var text = document.querySelector('[data-status-text]');
+    var hint = document.querySelector('[data-status-hint]');
+    var lastRun = document.querySelector('[data-last-run]');
+    var logPane = document.querySelector('[data-log-pane]');
+    if (!dot || !text) return;
+    var lastState = '';
+    var hints = {
+      'Syncing and queued': 'Another sync pass is already staged behind the active run.',
+      'Syncing now':        'The active pass will finish before a queued request is promoted.',
+      'Queued':             'Another sync pass is already staged behind the active run.',
+      'Idle':               'No active sync. New requests start immediately.'
+    };
+    function poll() {
+      fetch('/api/status', {cache: 'no-store'}).then(function(r) { return r.json(); }).then(function(s) {
+        dot.classList.toggle('running', !!s.running);
+        dot.classList.toggle('queued', !s.running && !!s.queued);
+        text.textContent = s.state;
+        if (hint) hint.textContent = hints[s.state] || hints['Idle'];
+        if (lastRun) lastRun.textContent = s.last_run;
+        if (logPane && s.logs) {
+          var atBottom = (logPane.scrollTop + logPane.clientHeight) >= (logPane.scrollHeight - 8);
+          logPane.textContent = s.logs;
+          if (atBottom) logPane.scrollTop = logPane.scrollHeight;
+        }
+        // Reload when a sync just finished — surfaces freshly-downloaded media.
+        if (lastState && (lastState.indexOf('Syncing') === 0) && s.state === 'Idle') {
+          window.location.reload();
+        }
+        lastState = s.state;
+        var delay = s.running || s.queued ? 3000 : 12000;
+        setTimeout(poll, delay);
+      }).catch(function() { setTimeout(poll, 15000); });
+    }
+    setTimeout(poll, 2000);
   })();
   </script>
 </body>
@@ -1021,6 +1085,21 @@ def is_running() -> bool:
 
 def is_queued() -> bool:
     return PENDING_FILE.exists()
+
+
+def last_run_label() -> str:
+    try:
+        ts = int(LAST_RUN_FILE.read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return "Never"
+    delta = max(0, int(time.time()) - ts)
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h {(delta % 3600) // 60}m ago"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 def request_download(source: str) -> str:
@@ -1247,6 +1326,7 @@ def index():
         total_pages=total_pages,
         matched_count=matched_count,
         page_url=page_url,
+        last_run=last_run_label(),
     )
 
 
@@ -1280,6 +1360,27 @@ def run():
     if result == "queued":
         return redirect(url_for("index", flash="Sync queued behind the active pass.", ft="warn"))
     return redirect(url_for("index", flash="Sync started.", ft="ok"))
+
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    running = is_running()
+    queued = is_queued()
+    if running and queued:
+        state = "Syncing and queued"
+    elif running:
+        state = "Syncing now"
+    elif queued:
+        state = "Queued"
+    else:
+        state = "Idle"
+    return jsonify(
+        running=running,
+        queued=queued,
+        state=state,
+        last_run=last_run_label(),
+        logs=read_logs(40),
+    )
 
 
 @app.route("/downloads/<path:relative_path>", methods=["GET"])
