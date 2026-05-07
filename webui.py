@@ -749,6 +749,121 @@ PAGE_TEMPLATE = """
         min-height: 17rem;
       }
     }
+    /* Modal Lightbox */
+    .modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(4, 8, 10, 0.95);
+      backdrop-filter: blur(8px);
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 200ms ease;
+    }
+
+    .modal.open {
+      display: flex;
+      opacity: 1;
+    }
+
+    .modal-content {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      max-width: 1200px;
+      max-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-video-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 4rem;
+    }
+
+    .modal video {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      box-shadow: var(--shadow);
+      background: #000;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 1rem;
+      right: 1.5rem;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-size: 1.5rem;
+      width: 3rem;
+      height: 3rem;
+      border-radius: 50%;
+      cursor: pointer;
+      z-index: 1001;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 140ms ease;
+    }
+
+    .modal-close:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .modal-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-size: 1.5rem;
+      width: 3.5rem;
+      height: 3.5rem;
+      border-radius: 50%;
+      cursor: pointer;
+      z-index: 1001;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 140ms ease, transform 140ms ease;
+    }
+
+    .modal-nav:hover {
+      background: rgba(0, 0, 0, 0.8);
+      transform: translateY(-50%) scale(1.05);
+    }
+
+    .modal-nav.prev { left: 1rem; }
+    .modal-nav.next { right: 1rem; }
+
+    @media (max-width: 720px) {
+      .modal-video-container {
+        padding: 1rem 0;
+      }
+      .modal-nav {
+        width: 2.5rem;
+        height: 2.5rem;
+      }
+      .modal-nav.prev { left: 0.5rem; }
+      .modal-nav.next { right: 0.5rem; }
+      .modal-close {
+        top: 0.5rem;
+        right: 0.5rem;
+        width: 2.5rem;
+        height: 2.5rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -951,30 +1066,100 @@ PAGE_TEMPLATE = """
     </section>
   </main>
 
+  <div class="modal" id="media-modal">
+    <button class="modal-close" aria-label="Close" id="modal-close">&times;</button>
+    <div class="modal-content">
+      <button class="modal-nav prev" aria-label="Previous" id="modal-prev">&#10094;</button>
+      <div class="modal-video-container" id="modal-video-container">
+        <!-- Video injected here -->
+      </div>
+      <button class="modal-nav next" aria-label="Next" id="modal-next">&#10095;</button>
+    </div>
+  </div>
+
   <script>
-  // Click-to-play: thumbs are <img> until clicked, then swap to <video>.
-  // Avoids instantiating 24 video elements per page.
+  // Modal Lightbox Player
   (function() {
-    document.addEventListener('click', function(ev) {
-      var thumb = ev.target.closest('.media-thumb');
+    var modal = document.getElementById('media-modal');
+    var container = document.getElementById('modal-video-container');
+    var closeBtn = document.getElementById('modal-close');
+    var prevBtn = document.getElementById('modal-prev');
+    var nextBtn = document.getElementById('modal-next');
+    var currentThumb = null;
+
+    function openModal(thumb) {
       if (!thumb || !thumb.dataset.media) return;
-      ev.preventDefault();
+      currentThumb = thumb;
       var url = thumb.dataset.media;
       var poster = thumb.dataset.poster || '';
+      
+      container.innerHTML = '';
       var video = document.createElement('video');
       video.controls = true;
       video.autoplay = true;
       video.preload = 'metadata';
       if (poster) video.poster = poster;
       video.src = url;
-      video.style.width = '100%';
-      video.style.height = '100%';
-      video.style.objectFit = 'cover';
-      thumb.innerHTML = '';
-      thumb.style.cursor = 'default';
-      thumb.removeAttribute('data-media');
-      thumb.appendChild(video);
+      container.appendChild(video);
+      
+      modal.classList.add('open');
+      updateNavButtons();
+    }
+
+    function closeModal() {
+      modal.classList.remove('open');
+      container.innerHTML = '';
+      currentThumb = null;
+    }
+
+    function getSiblings() {
+      return Array.from(document.querySelectorAll('.media-thumb[data-media]'));
+    }
+
+    function updateNavButtons() {
+      if (!currentThumb) return;
+      var thumbs = getSiblings();
+      var index = thumbs.indexOf(currentThumb);
+      prevBtn.style.display = index > 0 ? 'flex' : 'none';
+      nextBtn.style.display = index >= 0 && index < thumbs.length - 1 ? 'flex' : 'none';
+    }
+
+    function navigate(direction) {
+      if (!currentThumb) return;
+      var thumbs = getSiblings();
+      var index = thumbs.indexOf(currentThumb);
+      var nextIndex = index + direction;
+      if (nextIndex >= 0 && nextIndex < thumbs.length) {
+        openModal(thumbs[nextIndex]);
+      }
+    }
+
+    document.addEventListener('click', function(ev) {
+      var thumb = ev.target.closest('.media-thumb');
+      if (thumb) {
+        ev.preventDefault();
+        openModal(thumb);
+      }
     }, false);
+
+    closeBtn.addEventListener('click', closeModal);
+    prevBtn.addEventListener('click', function() { navigate(-1); });
+    nextBtn.addEventListener('click', function() { navigate(1); });
+
+    // Close on background click
+    modal.addEventListener('click', function(ev) {
+      if (ev.target === modal || ev.target === modal.querySelector('.modal-content') || ev.target === container) {
+        closeModal();
+      }
+    });
+
+    // Keyboard navigation
+    document.addEventListener('keydown', function(ev) {
+      if (!modal.classList.contains('open')) return;
+      if (ev.key === 'Escape') closeModal();
+      else if (ev.key === 'ArrowLeft') navigate(-1);
+      else if (ev.key === 'ArrowRight') navigate(1);
+    });
   })();
 
   // Auto-dismiss flash after 6s.

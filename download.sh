@@ -11,7 +11,7 @@ COOKIES_FILE="${COOKIES_FILE:-/config/cookies.txt}"
 DOWNLOADS_DIR="${DOWNLOADS_DIR:-/downloads}"
 OUTPUT_TEMPLATE="${OUTPUT_TEMPLATE:-%(uploader)s/%(upload_date)s - %(title).80B [%(id)s].%(ext)s}"
 MAX_DOWNLOADS="${MAX_DOWNLOADS:-0}"
-CONCURRENT_FRAGMENTS="${CONCURRENT_FRAGMENTS:-4}"
+CONCURRENT_FRAGMENTS="${CONCURRENT_FRAGMENTS:-16}"
 RETRIES="${RETRIES:-10}"
 SOCKET_TIMEOUT="${SOCKET_TIMEOUT:-30}"
 
@@ -51,7 +51,10 @@ run_channel() {
     --continue \
     --retries "${RETRIES}" \
     --fragment-retries "${RETRIES}" \
-    --retry-sleep "fragment:exp=1:30" \
+    --extractor-retries "${RETRIES}" \
+    --file-access-retries "${RETRIES}" \
+    --retry-sleep "fragment:exp=1:15" \
+    --clean-info-json \
     --socket-timeout "${SOCKET_TIMEOUT}" \
     --concurrent-fragments "${CONCURRENT_FRAGMENTS}" \
     --download-archive "${ARCHIVE_FILE}" \

@@ -23,7 +23,7 @@ services:
       - ./downloads:/downloads
       # Persistent logs
       - ./logs:/logs
-    expose:
-      - "8080"
+    ports:
+      - "8080:8080"
     labels:
-      proxy.aliases: tiktok-dl.jickman.cc
+      # proxy.aliases: your.domain.com
