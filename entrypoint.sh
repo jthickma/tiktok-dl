@@ -19,10 +19,27 @@ run_as_app() {
   su-exec "${APP_USER}:${APP_GROUP}" "$@"
 }
 
+ensure_state_file() {
+  local var_name="$1"
+  local path="${!var_name}"
+
+  if [[ -d "${path}" ]]; then
+    echo "Warning: ${path} is a directory; using ${path}/$(basename "${path}") instead." >&2
+    path="${path}/$(basename "${path}")"
+  fi
+
+  mkdir -p "$(dirname "${path}")"
+  touch "${path}"
+  printf -v "${var_name}" '%s' "${path}"
+  export "${var_name}"
+}
+
 mkdir -p /downloads /logs /config
+ensure_state_file CHANNELS_FILE
+ensure_state_file ARCHIVE_FILE
+mkdir -p "$(dirname "${LOG_FILE}")"
 touch "${LOG_FILE}"
-touch /config/archive.txt
-chown -R "${APP_UID}:${APP_GID}" /downloads /logs
+chown -R "${APP_UID}:${APP_GID}" /downloads /logs /config
 
 echo "=== tiktok-dl ==="
 echo "Schedule : ${CRON_SCHEDULE}"

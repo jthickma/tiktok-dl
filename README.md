@@ -37,7 +37,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The compose file mounts `./channels.txt`, `./archive.txt`, `./downloads`, and `./logs` so everything is editable from the host.
+The compose file mounts `./config`, `./downloads`, and `./logs` so everything is editable from the host. On first start, the container creates `./config/channels.txt` and `./config/archive.txt` if they are missing; `channels.txt` is also editable from the web UI.
 
 ## Configuration
 
@@ -52,8 +52,8 @@ All knobs are environment variables. Defaults are sensible — most users only s
 | `SOCKET_TIMEOUT` | `30` | Per-request socket timeout (seconds). |
 | `CONCURRENT_FRAGMENTS` | `4` | Parallel fragment downloads per video. |
 | `PORT` | `8080` | Web UI port (standalone mode). |
-| `CHANNELS_FILE` | `/config/channels.txt` (Docker) / `./channels.txt` | One TikTok profile URL per line. `#` starts a comment. |
-| `ARCHIVE_FILE` | `/config/archive.txt` / `./archive.txt` | yt-dlp's "already downloaded" log. |
+| `CHANNELS_FILE` | `/config/channels.txt` (Docker) / `./channels.txt` | One TikTok profile URL per line. `#` starts a comment. Created on startup if missing. |
+| `ARCHIVE_FILE` | `/config/archive.txt` / `./archive.txt` | yt-dlp's "already downloaded" log. Created on startup if missing. |
 | `COOKIES_FILE` | `/config/cookies.txt` | Optional. Used if present (Netscape format). |
 | `DOWNLOADS_DIR` | `/downloads` / `./downloads` | Where finished videos land. |
 | `LOG_FILE` | `/logs/download.log` / `./logs/download.log` | Log destination. |

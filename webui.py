@@ -33,6 +33,29 @@ PER_PAGE = 24
 CACHE_TTL = 300  # seconds — async background refresh, served stale meanwhile
 
 
+def _ensure_state_file(path: Path) -> Path:
+    if path.exists() and path.is_dir():
+        path = path / path.name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    return path
+
+
+def ensure_state_files() -> None:
+    global CHANNELS_FILE, ARCHIVE_FILE
+
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOG_FILE.touch(exist_ok=True)
+    CHANNELS_FILE = _ensure_state_file(CHANNELS_FILE)
+    ARCHIVE_FILE = _ensure_state_file(ARCHIVE_FILE)
+    os.environ["CHANNELS_FILE"] = str(CHANNELS_FILE)
+    os.environ["ARCHIVE_FILE"] = str(ARCHIVE_FILE)
+
+
+ensure_state_files()
+
+
 @dataclass
 class MediaEntry:
     creator: str
@@ -1223,7 +1246,7 @@ _compiled_template = Template(PAGE_TEMPLATE)
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except OSError:
         return ""
 
 
@@ -1517,6 +1540,7 @@ def index():
 
 @app.route("/save", methods=["POST"])
 def save():
+    ensure_state_files()
     channels = request.form.get("channels", "").replace("\r\n", "\n")
     if not channels.endswith("\n"):
         channels += "\n"

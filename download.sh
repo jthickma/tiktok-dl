@@ -23,6 +23,20 @@ log() {
   echo "[$(timestamp)] $*"
 }
 
+ensure_state_file() {
+  local var_name="$1"
+  local path="${!var_name}"
+
+  if [[ -d "${path}" ]]; then
+    log "Warning: ${path} is a directory; using ${path}/$(basename "${path}") instead."
+    path="${path}/$(basename "${path}")"
+  fi
+
+  mkdir -p "$(dirname "${path}")"
+  touch "${path}"
+  printf -v "${var_name}" '%s' "${path}"
+}
+
 normalize_channel() {
   echo "$1" | sed 's/#.*//' | xargs
 }
@@ -75,7 +89,8 @@ run_channel() {
 }
 
 mkdir -p "${DOWNLOADS_DIR}"
-touch "${ARCHIVE_FILE}"
+ensure_state_file CHANNELS_FILE
+ensure_state_file ARCHIVE_FILE
 
 log "============================================"
 log "Starting download run"

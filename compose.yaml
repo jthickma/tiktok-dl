@@ -13,12 +13,10 @@ services:
       # TZ for cron schedule
       TZ: America/Chicago
     volumes:
-      # Channel list — editable via web UI or any file editor
-      - ./channels.txt:/config/channels.txt
-      # Download archive — tracks already-downloaded videos
-      - ./archive.txt:/config/archive.txt
+      # Config files. channels.txt and archive.txt are created on startup if missing.
+      - ./config:/config
       # Optional cookies file for authentication
-      # - ./cookies.txt:/config/cookies.txt:ro
+      # - ./config/cookies.txt:/config/cookies.txt:ro
       # Downloaded videos output
       - ./downloads:/downloads
       # Persistent logs
@@ -26,4 +24,4 @@ services:
     ports:
       - "8080:8080"
     labels:
-      # proxy.aliases: your.domain.com
+       proxy.aliases: tiktok-dl.jickman.cc

@@ -54,6 +54,14 @@ CRON_SCHEDULE = os.environ.get("CRON_SCHEDULE", "0 */6 * * *")
 PORT = int(os.environ.get("PORT", "8080"))
 
 
+def _ensure_state_file(path: Path) -> Path:
+    if path.exists() and path.is_dir():
+        path = path / path.name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    return path
+
+
 def _parse_interval(schedule: str) -> int:
     """Return sync interval in seconds from a cron expression.
 
@@ -107,14 +115,24 @@ def _watch_channels() -> None:
 
 
 def main() -> None:
+    global CHANNELS_FILE, ARCHIVE_FILE
+
     # --- Bootstrap directories ---
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ARCHIVE_FILE.touch(exist_ok=True)
+    LOG_FILE.touch(exist_ok=True)
 
-    if not CHANNELS_FILE.exists():
-        CHANNELS_FILE.touch()
+    archive_before = ARCHIVE_FILE
+    channels_before = CHANNELS_FILE
+    ARCHIVE_FILE = _ensure_state_file(ARCHIVE_FILE)
+    CHANNELS_FILE = _ensure_state_file(CHANNELS_FILE)
+    os.environ["ARCHIVE_FILE"] = str(ARCHIVE_FILE)
+    os.environ["CHANNELS_FILE"] = str(CHANNELS_FILE)
+
+    if CHANNELS_FILE != channels_before or CHANNELS_FILE.stat().st_size == 0:
         print(f"Created empty {CHANNELS_FILE} — add TikTok channel URLs, one per line.")
+    if ARCHIVE_FILE != archive_before:
+        print(f"Using archive file {ARCHIVE_FILE}.")
 
     interval = _parse_interval(CRON_SCHEDULE)
 
