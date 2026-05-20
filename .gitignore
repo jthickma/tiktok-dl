@@ -8,3 +8,4 @@ venv
 cookies.txt
 channels.txt
 archive.txt
+staticfiles/

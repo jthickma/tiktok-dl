@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Standalone launcher for tiktok-dl.
 
-Sets up directories, starts the Flask web UI, runs periodic syncs, and watches
-channels.txt for changes — all without Docker, supercronic, or inotifywait.
+Bootstraps state files, starts the Django dev server, schedules periodic syncs,
+and watches channels.txt for changes — without Docker, supercronic, or inotifywait.
 
 Usage:
     python run.py
 
 Environment variables (all optional):
-    CHANNELS_FILE       path to channels.txt        (default: ./channels.txt)
-    ARCHIVE_FILE        path to archive.txt          (default: ./archive.txt)
-    DOWNLOADS_DIR       path to downloads folder     (default: ./downloads)
-    LOG_FILE            path to download log         (default: ./logs/download.log)
-    PID_FILE            path to worker PID file      (default: /tmp/tiktok-dl.pid)
-    PENDING_FILE        path to pending-sync flag    (default: /tmp/tiktok-dl.pending)
-    REQUEST_SCRIPT      path to request_download.sh  (default: ./request_download.sh)
-    CRON_SCHEDULE       cron expression for syncs    (default: 0 */6 * * *)
-    PORT                web UI port                  (default: 8080)
+    CHANNELS_FILE       path to channels.txt          (default: ./channels.txt)
+    ARCHIVE_FILE        path to archive.txt           (default: ./archive.txt)
+    DOWNLOADS_DIR       path to downloads folder      (default: ./downloads)
+    LOG_FILE            path to download log          (default: ./logs/download.log)
+    PID_FILE            worker PID file               (default: /tmp/tiktok-dl.pid)
+    PENDING_FILE        pending-sync flag             (default: /tmp/tiktok-dl.pending)
+    REQUEST_SCRIPT      request_download.sh path      (default: ./request_download.sh)
+    CRON_SCHEDULE       cron expression               (default: 0 */6 * * *)
+    PORT                web UI port                   (default: 8080)
     OUTPUT_TEMPLATE     yt-dlp output template
-    MAX_DOWNLOADS       max downloads per channel per run (default: 0 = unlimited)
+    MAX_DOWNLOADS       max downloads per channel per run (0 = unlimited)
 """
 
 import hashlib
@@ -31,7 +31,6 @@ from pathlib import Path
 
 _BASE = Path(__file__).parent
 
-# Resolve paths — set env vars so webui.py and shell scripts inherit them.
 _defaults = {
     "CHANNELS_FILE": str(_BASE / "channels.txt"),
     "ARCHIVE_FILE": str(_BASE / "archive.txt"),
@@ -41,6 +40,7 @@ _defaults = {
     "PENDING_FILE": "/tmp/tiktok-dl.pending",
     "LAST_RUN_FILE": "/tmp/tiktok-dl.last-run",
     "REQUEST_SCRIPT": str(_BASE / "request_download.sh"),
+    "DJANGO_SETTINGS_MODULE": "tiktokdl.settings",
 }
 for key, val in _defaults.items():
     os.environ.setdefault(key, val)
@@ -63,13 +63,6 @@ def _ensure_state_file(path: Path) -> Path:
 
 
 def _parse_interval(schedule: str) -> int:
-    """Return sync interval in seconds from a cron expression.
-
-    Supports simple patterns:
-      * ``0 */N * * *``  → every N hours
-      * ``*/N * * * *``  → every N minutes
-    Falls back to 6 hours if the pattern isn't recognised.
-    """
     parts = schedule.strip().split()
     if len(parts) == 5:
         minute_field, hour_field = parts[0], parts[1]
@@ -109,33 +102,19 @@ def _watch_channels() -> None:
         new = _md5(CHANNELS_FILE)
         if new != current:
             current = new
-            print(f"channels.txt changed — triggering sync", flush=True)
+            print("channels.txt changed — triggering sync", flush=True)
             _trigger_download("watch")
-            time.sleep(10)  # debounce
+            time.sleep(10)
 
 
 def main() -> None:
-    global CHANNELS_FILE, ARCHIVE_FILE
-
-    # --- Bootstrap directories ---
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     LOG_FILE.touch(exist_ok=True)
-
-    archive_before = ARCHIVE_FILE
-    channels_before = CHANNELS_FILE
-    ARCHIVE_FILE = _ensure_state_file(ARCHIVE_FILE)
-    CHANNELS_FILE = _ensure_state_file(CHANNELS_FILE)
-    os.environ["ARCHIVE_FILE"] = str(ARCHIVE_FILE)
-    os.environ["CHANNELS_FILE"] = str(CHANNELS_FILE)
-
-    if CHANNELS_FILE != channels_before or CHANNELS_FILE.stat().st_size == 0:
-        print(f"Created empty {CHANNELS_FILE} — add TikTok channel URLs, one per line.")
-    if ARCHIVE_FILE != archive_before:
-        print(f"Using archive file {ARCHIVE_FILE}.")
+    _ensure_state_file(ARCHIVE_FILE)
+    _ensure_state_file(CHANNELS_FILE)
 
     interval = _parse_interval(CRON_SCHEDULE)
-
     print("=== tiktok-dl (standalone) ===")
     print(f"Channels : {CHANNELS_FILE}")
     print(f"Downloads: {DOWNLOADS_DIR}")
@@ -144,18 +123,13 @@ def main() -> None:
     print(f"Web UI   : http://localhost:{PORT}")
     print()
 
-    # --- Initial sync ---
     _trigger_download("startup")
-
-    # --- Periodic sync thread ---
     threading.Thread(target=_scheduler, args=(interval,), daemon=True).start()
-
-    # --- channels.txt watcher thread ---
     threading.Thread(target=_watch_channels, daemon=True).start()
 
-    # --- Flask (blocks until Ctrl-C) ---
-    import webui  # noqa: imported here so env vars are set first
-    webui.app.run(host="0.0.0.0", port=PORT)
+    sys.argv = ["manage.py", "runserver", f"0.0.0.0:{PORT}", "--noreload"]
+    from django.core.management import execute_from_command_line
+    execute_from_command_line(sys.argv)
 
 
 if __name__ == "__main__":

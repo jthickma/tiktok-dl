@@ -22,6 +22,8 @@ services:
       # Persistent logs
       - ./logs:/logs
     ports:
-      - "8080:8080"
+      # Ephemeral host port — Docker assigns a free port at runtime.
+      # Look it up with: docker port tiktok-dl 8080
+      - "8080"
     labels:
        proxy.aliases: tiktok-dl.jickman.cc

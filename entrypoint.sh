@@ -46,7 +46,7 @@ echo "Schedule : ${CRON_SCHEDULE}"
 echo "Web UI   : http://0.0.0.0:8080"
 echo "User     : ${APP_UID}:${APP_GID}"
 echo "Channels :"
-grep -v '^\s*#' "${CHANNELS_FILE}" 2>/dev/null | grep -v '^\s*$' | while read -r line; do
+{ grep -vE '^\s*(#|$)' "${CHANNELS_FILE}" 2>/dev/null || true; } | while read -r line; do
   echo "  - ${line}"
 done
 echo ""
@@ -59,7 +59,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running initial download..." | tee -a "${LO
 run_as_app /request_download.sh startup
 
 # --- Start web UI (background) ---
-run_as_app python3 /webui.py &
+run_as_app sh -c "cd /app && gunicorn tiktokdl.wsgi:application --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile -" &
 WEBUI_PID=$!
 
 # --- Start cron (background) ---

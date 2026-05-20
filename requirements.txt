@@ -1,2 +1,4 @@
-flask
+django>=5.0,<6.0
+gunicorn>=22
 yt-dlp
+whitenoise>=6

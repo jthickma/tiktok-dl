@@ -1,0 +1,185 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tiktok-dl — archive</title>
+  <link rel="preconnect" href="{% static 'archive/css/main.css' %}">
+  <link rel="stylesheet" href="{% static 'archive/css/main.css' %}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23ff4d6b'/><text x='50' y='66' font-size='58' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='800'>t</text></svg>">
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand">
+      <span class="logo">t</span>
+      <span class="name">tiktok-dl <span class="dim">/ archive</span></span>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" title="Last sync">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span class="label">Last</span>
+      <span data-last-run>{{ last_run }}</span>
+    </span>
+    <span class="pill" title="Worker state">
+      <span class="dot {% if running %}running{% elif queued %}queued{% endif %}" data-status-dot></span>
+      <span data-status-text>{{ worker_state }}</span>
+    </span>
+    <form method="post" action="{% url 'run' %}" style="margin:0;">
+      <button type="submit" class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Sync now
+      </button>
+    </form>
+  </header>
+
+  <main class="shell">
+    {% if flash %}
+    <div class="flash {{ flash_type }}" data-flash>{{ flash }}</div>
+    {% endif %}
+
+    <section class="hero">
+      <div>
+        <h1>Your TikTok archive</h1>
+        <p class="lead">Track creators, queue sync passes, browse downloaded videos with metadata sidecars — all in one place.</p>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="label">Creators</div><div class="value">{{ channel_count }}</div></div>
+        <div class="stat"><div class="label">Videos</div><div class="value">{{ media_count }}</div></div>
+        <div class="stat"><div class="label">Archive IDs</div><div class="value">{{ archive_count }}</div></div>
+        <div class="stat"><div class="label">Size</div><div class="value">{{ library_size }}</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head" style="border-bottom:none; padding-bottom:0;">
+        <div>
+          <h2>Media browser</h2>
+          <div class="sub">{{ matched_count }} of {{ media_count }} videos{% if selected_creator %} — @{{ selected_creator }}{% endif %}{% if query %} — “{{ query }}”{% endif %}</div>
+        </div>
+      </div>
+
+      <form method="get" action="/" class="toolbar">
+        <div>
+          <div class="label-row"><label for="q">Search</label></div>
+          <input id="q" type="text" name="q" value="{{ query }}" placeholder="Title, caption, creator, URL…">
+        </div>
+        <div>
+          <div class="label-row"><label for="creator">Creator</label></div>
+          <select id="creator" name="creator">
+            <option value="">All creators</option>
+            {% for c in creators %}
+            <option value="{{ c }}" {% if c == selected_creator %}selected{% endif %}>@{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Apply</button>
+          <a class="btn btn-ghost" href="/">Reset</a>
+        </div>
+      </form>
+
+      {% if media_entries %}
+      <div class="media-grid">
+        {% for entry in media_entries %}
+        <article class="media-card">
+          <div class="thumb"
+               data-media="{{ entry.media_url }}"
+               {% if entry.poster_url %}data-poster="{{ entry.poster_url }}"{% endif %}
+               data-title="{{ entry.title }}"
+               data-creator="{{ entry.creator }}"
+               data-date="{{ entry.upload_date|default:'' }}">
+            {% if entry.poster_url %}
+            <img src="{{ entry.poster_url }}" loading="lazy" decoding="async" alt="">
+            {% else %}
+            <div class="thumb-empty">No preview</div>
+            {% endif %}
+            <button class="play" type="button" aria-label="Play">▶</button>
+            {% if entry.duration_label %}<span class="duration">{{ entry.duration_label }}</span>{% endif %}
+          </div>
+          <div class="creator">@{{ entry.creator }}</div>
+          <h3 class="title" title="{{ entry.title }}">{{ entry.title }}</h3>
+          <div class="meta">
+            <span>{{ entry.upload_date|default:entry.modified_label }}</span>
+            <span>{{ entry.size_label }}</span>
+          </div>
+          <div class="card-actions">
+            {% if entry.source_url %}<a href="{{ entry.source_url }}" target="_blank" rel="noreferrer">source</a>{% endif %}
+            {% if entry.info_url %}<a href="{{ entry.info_url }}" target="_blank" rel="noreferrer">json</a>{% endif %}
+            <a href="{{ entry.media_url }}" target="_blank" rel="noreferrer">file</a>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+
+      {% if total_pages > 1 %}
+      <nav class="pagination">
+        <span class="count">{{ matched_count }} result{{ matched_count|pluralize }}</span>
+        {% for label, url, current in pagination_links %}
+          {% if current %}<span class="current">{{ label }}</span>
+          {% else %}<a href="{{ url }}">{{ label }}</a>{% endif %}
+        {% endfor %}
+      </nav>
+      {% endif %}
+
+      {% else %}
+      <div class="empty">No videos match your filters. <a href="/" style="color:var(--accent);">Reset</a> or trigger a sync to fetch new posts.</div>
+      {% endif %}
+    </section>
+
+    <details class="card">
+      <summary class="card-head">
+        <div>
+          <h2>Subscriptions</h2>
+          <div class="sub">Edit tracked profiles. {{ channel_count }} active.</div>
+        </div>
+        <span class="chev">⌄</span>
+      </summary>
+      <div class="card-body">
+        <form method="post" action="{% url 'save' %}">
+          <div class="workspace">
+            <div>
+              <div class="label-row">
+                <label for="channels-area">One channel URL per line</label>
+                <span class="hint">Audio-only posts (mp3/m4a) are filtered out before download.</span>
+              </div>
+              <textarea id="channels-area" name="channels" spellcheck="false">{{ channels }}</textarea>
+              <div class="actions" style="margin-top:0.85rem;">
+                <button type="submit" class="btn btn-primary">Save channels</button>
+                <button type="submit" formaction="{% url 'save' %}?run=1" class="btn">{{ run_button_label }}</button>
+              </div>
+            </div>
+            <aside class="sidebar-meta">
+              <div class="row"><div class="k">Channels file</div><div class="v">{{ channel_file }}</div></div>
+              <div class="row"><div class="k">Archive file</div><div class="v">{{ archive_file }}</div></div>
+              <div class="row"><div class="k">Downloads root</div><div class="v">{{ downloads_dir }}</div></div>
+            </aside>
+          </div>
+        </form>
+      </div>
+    </details>
+
+    <details class="card">
+      <summary class="card-head">
+        <div>
+          <h2>Activity log</h2>
+          <div class="sub">Recent worker output. Updates live while syncing.</div>
+        </div>
+        <span class="chev">⌄</span>
+      </summary>
+      <pre class="log-pane" data-log-pane>{{ logs }}</pre>
+    </details>
+  </main>
+
+  <div class="modal" id="media-modal">
+    <button class="modal-close" aria-label="Close" id="modal-close">&times;</button>
+    <div class="modal-content">
+      <button class="modal-nav prev" aria-label="Previous" id="modal-prev">&#10094;</button>
+      <div class="modal-video" id="modal-video"></div>
+      <button class="modal-nav next" aria-label="Next" id="modal-next">&#10095;</button>
+      <div class="modal-info" id="modal-info"></div>
+    </div>
+  </div>
+
+  <script src="{% static 'archive/js/app.js' %}"></script>
+</body>
+</html>
